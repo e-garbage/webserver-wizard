@@ -27,7 +27,7 @@ I usally do this for simple static website without much back-end, but still I ca
 Copy paste this line in the terminal of your webserver
 
 ```
-bash <(curl -fsSL https://raw.githubusercontent.com/e-garbage/webserver-wizard/refs/heads/main/wizard.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/e-garbage/webserver-wizard/main/wizard.sh)
 
 ```
 
