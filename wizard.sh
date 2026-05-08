@@ -63,8 +63,8 @@ select_webserver() {
 
   if [[ -n "$existing" ]]; then
     log info "Detected existing webserver: $existing"
-    echo "1) Continue with $existing"
-    echo "2) Switch to $([ "$existing" = "nginx" ] && echo "apache2" || echo "nginx")"
+    echo "1) Continue with $existing" >&2
+    echo "2) Switch to $([ "$existing" = "nginx" ] && echo "apache2" || echo "nginx")" >&2
     read -p "Select option (1-2): " choice
 
     case $choice in
@@ -74,8 +74,8 @@ select_webserver() {
     esac
   else
     log info "No webserver detected"
-    echo "1) nginx (recommended - faster, lighter)"
-    echo "2) apache2 (traditional, more modules)"
+    echo "1) nginx (recommended - faster, lighter)" >&2
+    echo "2) apache2 (traditional, more modules)" >&2
     read -p "Select webserver (1-2): " choice
 
     case $choice in
@@ -90,7 +90,7 @@ get_websites() {
   local webserver=$1
   local websites=()
 
-  read -p "How many websites to setup? " num_sites
+  read -p "How many websites to setup? " num_sites >&2
   if ! [[ "$num_sites" =~ ^[0-9]+$ ]] || [[ $num_sites -lt 1 ]]; then
     log error "Please enter a valid number (≥1)"
     get_websites "$webserver"
@@ -105,7 +105,7 @@ get_websites() {
   fi
 
   for ((i=1; i<=num_sites; i++)); do
-    read -p "Domain name for site $i (e.g., example.com): " domain
+    read -p "Domain name for site $i (e.g., example.com): " domain >&2
 
     if ! [[ "$domain" =~ ^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z0-9]{2,}$ ]]; then
       log error "Invalid domain format. Use format: example.com"
@@ -120,17 +120,17 @@ get_websites() {
 }
 
 get_firewall_config() {
-  echo ""
+  echo "" >&2
   log info "UFW Firewall Configuration"
-  echo "By default, ports 80 (HTTP) and 443 (HTTPS) will be open."
-  echo "1) Use default (80, 443 only)"
-  echo "2) Customize open ports"
-  read -p "Select option (1-2): " choice
+  echo "By default, ports 80 (HTTP) and 443 (HTTPS) will be open." >&2
+  echo "1) Use default (80, 443 only)" >&2
+  echo "2) Customize open ports" >&2
+  read -p "Select option (1-2): " choice >&2
 
   local ports=("80" "443")
 
   if [[ "$choice" == "2" ]]; then
-    read -p "Enter comma-separated ports to open (e.g., 80,443,22,3000): " custom_ports
+    read -p "Enter comma-separated ports to open (e.g., 80,443,22,3000): " custom_ports >&2
     IFS=',' read -ra ports <<< "$custom_ports"
 
     for i in "${!ports[@]}"; do
