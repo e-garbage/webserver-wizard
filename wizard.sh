@@ -122,12 +122,12 @@ get_websites() {
 get_firewall_config() {
   echo "" >&2
   log info "UFW Firewall Configuration"
-  echo "By default, ports 80 (HTTP) and 443 (HTTPS) will be open." >&2
-  echo "1) Use default (80, 443 only)" >&2
+  echo "By default, ports 22 (SSH), 80 (HTTP) and 443 (HTTPS) will be open." >&2
+  echo "1) Use default (22, 80, 443 only)" >&2
   echo "2) Customize open ports" >&2
   read -p "Select option (1-2): " choice >&2
 
-  local ports=("80" "443")
+  local ports=("22" "80" "443")
 
   if [[ "$choice" == "2" ]]; then
     read -p "Enter comma-separated ports to open (e.g., 80,443,22,3000): " custom_ports >&2
