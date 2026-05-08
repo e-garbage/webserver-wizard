@@ -33,6 +33,20 @@ bash <(curl -fsSL https://raw.githubusercontent.com/e-garbage/webserver-wizard/m
 
 # What it does
 - Install Nginx or Apache2
-- setup as many domaine as you want under `/var/www/<domaine>/``
+- setup as many domaine as you want under `/var/www/<domaine>/html`
 - setup UFW port config (by default it will close every ports and keep 80 and 443 open)
 - update host system
+- check permissions of created folder tree
+
+# Tips
+If you copy stuff from another place into the `<domaine>/html` folder, dont forget to fix the permission of the new content with
+
+```
+sudo chown -R www-data:www-data .
+```
+# Additional scripts
+## Add FTP
+
+Handy script to create, edit and delete FTP user for your newly created websites. FTP users can only access the `/var/www/<domain>` folder you give them. 
+
+

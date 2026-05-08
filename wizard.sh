@@ -159,9 +159,9 @@ prompt_on_conflict() {
 
   if [[ -f "$config_path" ]]; then
     log warn "Configuration already exists for $domain"
-    echo "1) Skip this site"
-    echo "2) Overwrite existing config"
-    echo "3) Abort entire setup"
+    echo "1) Skip this site" >&2
+    echo "2) Overwrite existing config" >&2
+    echo "3) Abort entire setup" >&2
     read -p "Select option (1-3): " choice
 
     case $choice in
@@ -181,7 +181,7 @@ confirm_all_changes() {
   local websites=("$@")
   local ports=()
 
-  echo ""
+  echo "" 
   log info "Summary of Changes"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "Webserver: $webserver"
@@ -199,7 +199,7 @@ confirm_all_changes() {
   echo ""
   read -p "Proceed with setup? (yes/no): " confirm
 
-  if [[ "$confirm" != "yes" ]]; then
+  if [[ ! "$confirm" =~ ^[Yy]([Ee][Ss])?$ ]]; then
     log error "Setup cancelled"
     exit 0
   fi
@@ -276,7 +276,7 @@ generate_apache_config() {
 
     <Directory /var/www/$domain/html>
         Options Indexes FollowSymLinks
-        AllowOverride All
+        AllowOverride None
         Require all granted
     </Directory>
 
