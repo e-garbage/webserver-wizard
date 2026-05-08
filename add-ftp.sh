@@ -59,7 +59,7 @@ detect_websites() {
 }
 
 detect_ftp_users() {
-  awk -F: '$3 >= 1000 && $3 != 65534 {print $1}' /etc/passwd 2>/dev/null | grep -E "^ftp" || true
+  awk -F: '$3 >= 1000 && $3 != 65534 && $6 ~ "^/var/www/" && $7 == "/sbin/nologin" {print $1}' /etc/passwd 2>/dev/null || true
 }
 
 select_website() {
