@@ -42,23 +42,20 @@ detect_webserver() {
 
 detect_existing_sites() {
   local webserver=$1
-  local sites=()
 
   if [[ "$webserver" == "nginx" ]]; then
     if [[ -d /etc/nginx/sites-enabled ]]; then
-      while IFS= read -r file; do
-        sites+=("$(basename "$file")")
-      done < <(find /etc/nginx/sites-enabled -type l 2>/dev/null)
+      find /etc/nginx/sites-enabled -type l 2>/dev/null | while IFS= read -r file; do
+        basename "$file"
+      done
     fi
   elif [[ "$webserver" == "apache2" ]]; then
     if [[ -d /etc/apache2/sites-enabled ]]; then
-      while IFS= read -r file; do
-        sites+=("${file%.*}")
-      done < <(find /etc/apache2/sites-enabled -type l -name "*.conf" 2>/dev/null)
+      find /etc/apache2/sites-enabled -type l -name "*.conf" 2>/dev/null | while IFS= read -r file; do
+        echo "${file%.*}" | xargs basename
+      done
     fi
-  fi
-
-  printf '%s\n' "${sites[@]}" | sort -u
+  fi | sort -u
 }
 
 select_webserver() {
