@@ -462,11 +462,19 @@ main() {
   local webserver
   webserver=$(select_webserver)
 
-  local websites
-  mapfile -t websites < <(get_websites "$webserver")
+  local websites_output
+  websites_output=$(get_websites "$webserver")
+  local websites=()
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && websites+=("$line")
+  done <<< "$websites_output"
 
-  local firewall_ports
-  mapfile -t firewall_ports < <(get_firewall_config)
+  local firewall_output
+  firewall_output=$(get_firewall_config)
+  local firewall_ports=()
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && firewall_ports+=("$line")
+  done <<< "$firewall_output"
 
   confirm_all_changes "$webserver" "${websites[@]}"
 
