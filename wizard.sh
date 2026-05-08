@@ -27,7 +27,7 @@ require_root() {
 }
 
 is_installed() {
-  dpkg -l | grep -q "^ii  $1 " 2>/dev/null
+  dpkg -s "$1" 2>/dev/null | grep -q "Status: install ok installed"
 }
 
 detect_webserver() {
@@ -326,13 +326,12 @@ create_folders() {
   local domain=$1
   local webroot="/var/www/$domain/html"
 
-  if [[ ! -d "$webroot" ]]; then
-    mkdir -p "$webroot"
-    chown www-data:www-data /var/www/$domain
-    chown www-data:www-data "$webroot"
-    chmod 755 /var/www/$domain
-    chmod 755 "$webroot"
-  fi
+  mkdir -p "$webroot"
+  chown www-data:www-data /var/www
+  chown -R www-data:www-data /var/www/$domain
+  chmod 755 /var/www
+  chmod 755 /var/www/$domain
+  chmod 755 "$webroot"
 
   if [[ ! -f "$webroot/index.html" ]]; then
     cat > "$webroot/index.html" <<EOF
