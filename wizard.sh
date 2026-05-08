@@ -11,11 +11,11 @@ log() {
   local type=$1
   shift
   case "$type" in
-    success) echo -e "${COLOR_GREEN}✓${COLOR_RESET} $*" ;;
+    success) echo -e "${COLOR_GREEN}✓${COLOR_RESET} $*" >&2 ;;
     error)   echo -e "${COLOR_RED}✗${COLOR_RESET} $*" >&2 ;;
-    info)    echo -e "${COLOR_BLUE}→${COLOR_RESET} $*" ;;
-    warn)    echo -e "${COLOR_YELLOW}!${COLOR_RESET} $*" ;;
-    *)       echo "$*" ;;
+    info)    echo -e "${COLOR_BLUE}→${COLOR_RESET} $*" >&2 ;;
+    warn)    echo -e "${COLOR_YELLOW}!${COLOR_RESET} $*" >&2 ;;
+    *)       echo "$*" >&2 ;;
   esac
 }
 
