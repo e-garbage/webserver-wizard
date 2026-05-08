@@ -429,7 +429,7 @@ ascii_art(){
 
 main() {
   require_root
-
+  ascii_art
   log info "FTP Account Manager"
   echo "" >&2
 

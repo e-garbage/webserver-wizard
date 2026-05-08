@@ -23,6 +23,10 @@ _/j  L l\_!  _//^---^\\_ ░░░░░░░░░░░░░░░░░░�
 I was tired of doing the same exact config everytime I have to spin up a webserver.
 I usally do this for simple static website without much back-end, but still I can mess the things up pretty quickly
 
+
+> **⚠️ Note:** These scripts have been tested and are intended for **Ubuntu Server 24.04 LTS**. Compatibility with other Ubuntu versions or Linux distributions is not guaranteed. Use at your own risk on other systems.
+
+
 # Quick oneliner auto setup
 Copy paste this line in the terminal of your webserver
 
