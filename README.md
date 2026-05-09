@@ -39,6 +39,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/e-garbage/webserver-wizard/m
 - Install Nginx or Apache2
 - setup as many domaine as you want under `/var/www/<domaine>/html`
 - setup UFW port config (by default it will close every ports and keep 80 and 443 open)
+- setup ssh with a default config 
 - update host system
 - check permissions of created folder tree
 
@@ -52,5 +53,9 @@ sudo chown -R www-data:www-data .
 ## Add FTP
 
 Handy script to create, edit and delete FTP user for your newly created websites. FTP users can only access the `/var/www/<domain>` folder you give them. 
+Not secured, use at your own risks.
+
+## Add SFTP
+the same as above but for setting up SFTP users. Secured, strongly recommanded to use on WAN accessible network
 
 
