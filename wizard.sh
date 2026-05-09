@@ -451,6 +451,31 @@ ascii_art() {
   echo -e "${COLOR_RESET}"
 }
 
+setup_ssh() {
+  log info "Setting up SSH access..."
+  if ! command -v ssh &> /dev/null; then
+    log info "Installing OpenSSH Server..."
+    apt install -y openssh-server
+    systemctl enable ssh
+    systemctl start ssh
+  fi
+  cat > /etc/ssh/sshd_config <<EOF
+Include /etc/ssh/sshd_config.d/*.conf
+Port 22
+PermitRootLogin no
+PasswordAuthentication yes
+MaxAuthTries 6
+KbdInteractiveAuthentication no
+UsePAM yes
+X11Forwarding yes
+PrintMotd no
+AcceptEnv LANG LC_*
+Subsystem sftp /usr/lib/openssh/sftp-server
+EOF
+
+  log success "SSH server is ready to be reloaded for changes to take effect. Use: systemctl reload ssh"
+}
+
 main() {
   require_root
   ascii_art
@@ -489,6 +514,8 @@ main() {
 
   reload_webserver "$webserver"
   setup_ufw "${firewall_ports[@]}"
+  setup_ssh
+
 
   show_status "$webserver" "${websites[@]}"
 }
