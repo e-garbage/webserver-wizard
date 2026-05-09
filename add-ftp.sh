@@ -272,7 +272,8 @@ show_status() {
   echo "SFTP Connection Details:" >&2
   echo "  Host: $server_ip" >&2
   echo "  Username: $username" >&2
-  echo "  Login Directory: /var/www/$domain (chroot)" >&2
+  echo "  Chroot root: /var/www/$domain" >&2
+  echo "  Visible SFTP root inside the jail: /" >&2
   echo "" >&2
   echo "Useful commands:" >&2
   echo "  • List SFTP users: sudo getent group sftpusers | cut -d: -f4 | tr ',' '\n'" >&2
