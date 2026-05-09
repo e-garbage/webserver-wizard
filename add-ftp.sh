@@ -208,6 +208,10 @@ create_sftp_user() {
 
   log info "Creating SFTP user '$username'..."
 
+  # Ensure /var/www has correct ownership for chroot (required by SSH)
+  chown root:root /var/www
+  chmod 755 /var/www
+
   mkdir -p "$domain_dir"
   chown root:root "$domain_dir"
   chmod 755 "$domain_dir"
@@ -320,6 +324,11 @@ modify_user_access() {
   local domain_dir="/var/www/$domain"
 
   log info "Updating SFTP configuration for '$username'..."
+  
+  # Ensure /var/www has correct ownership for chroot (required by SSH)
+  chown root:root /var/www
+  chmod 755 /var/www
+  
   mkdir -p "$domain_dir"
   chown root:root "$domain_dir"
   chmod 755 "$domain_dir"
