@@ -133,8 +133,7 @@ confirm_all_changes() {
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
   echo "Domain: $domain" >&2
   echo "SFTP Username: $username" >&2
-  echo "Chroot Directory: /var/www/$domain" >&2
-  echo "SFTP Home: /$username" >&2
+  echo "Access Directory: /var/www/$domain" >&2
   echo "SSH Port: 22/tcp" >&2
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
   echo "" >&2
@@ -204,7 +203,6 @@ create_sftp_user() {
   local domain=$2
   local password=$3
   local domain_dir="/var/www/$domain"
-  local user_dir="$domain_dir/$username"
 
   log info "Creating SFTP user '$username'..."
 
@@ -216,12 +214,15 @@ create_sftp_user() {
   chown root:root "$domain_dir"
   chmod 755 "$domain_dir"
 
-  useradd -M -d "/$username" -s /usr/sbin/nologin -G sftpusers -c "SFTP access to $domain" "$username"
-  echo "$username:$password" | chpasswd
-
-  mkdir -p "$user_dir"
-  chown "$username:sftpusers" "$user_dir"
-  chmod 755 "$user_dir"
+  useradd -M -d "/" -s /usr/sbin/nologin -G sftpusers -c "SFTP access to $domain" "$username" || {
+    log error "Failed to create user $username"
+    return 1
+  }
+  echo "$username:$password" | chpasswd || {
+    log error "Failed to set password for $username"
+    userdel "$username" 2>/dev/null || true
+    return 1
+  }
 
   local config_file="/etc/ssh/sshd_config.d/sftp-$username.conf"
   cat > "$config_file" <<EOF
@@ -262,7 +263,8 @@ setup_sftp_firewall() {
 show_status() {
   local username=$1
   local domain=$2
-  local server_ip=$(hostname -I | awk '{print $1}')
+  local server_ip
+  server_ip=$(hostname -I 2>/dev/null | awk '{print $1}') || server_ip="<server_ip>"
 
   echo "" >&2
   log success "SFTP User Created Successfully!"
@@ -270,8 +272,7 @@ show_status() {
   echo "SFTP Connection Details:" >&2
   echo "  Host: $server_ip" >&2
   echo "  Username: $username" >&2
-  echo "  SFTP Home: /$username" >&2
-  echo "  Chroot Directory: /var/www/$domain" >&2
+  echo "  Login Directory: /var/www/$domain (chroot)" >&2
   echo "" >&2
   echo "Useful commands:" >&2
   echo "  • List SFTP users: sudo getent group sftpusers | cut -d: -f4 | tr ',' '\n'" >&2
@@ -333,10 +334,6 @@ modify_user_access() {
   chown root:root "$domain_dir"
   chmod 755 "$domain_dir"
 
-  mkdir -p "$domain_dir/$username"
-  chown "$username:sftpusers" "$domain_dir/$username"
-  chmod 755 "$domain_dir/$username"
-
   local config_file="/etc/ssh/sshd_config.d/sftp-$username.conf"
   cat > "$config_file" <<EOF
 # SFTP chroot for user $username
@@ -361,11 +358,6 @@ delete_sftp_user() {
   log info "Deleting SFTP user '$username'..."
 
   local config_file="/etc/ssh/sshd_config.d/sftp-$username.conf"
-  local chroot_dir=""
-
-  if [[ -f "$config_file" ]]; then
-    chroot_dir=$(grep -i 'ChrootDirectory' "$config_file" | awk '{print $2}')
-  fi
 
   local user_home
   user_home=$(getent passwd "$username" | cut -d: -f6)
@@ -374,9 +366,6 @@ delete_sftp_user() {
   log warn "Confirm deletion:"
   echo "  Username: $username" >&2
   echo "  Home Directory: $user_home" >&2
-  if [[ -n "$chroot_dir" ]]; then
-    echo "  Chroot Directory: $chroot_dir" >&2
-  fi
   echo "" >&2
   read -p "Delete this user? (yes/no): " confirm >&2
 
@@ -387,10 +376,6 @@ delete_sftp_user() {
 
   userdel "$username" 2>/dev/null || log warn "Failed to remove user account"
   rm -f "$config_file"
-
-  if [[ -n "$chroot_dir" ]]; then
-    rm -rf "$chroot_dir/$username" || true
-  fi
 
   validate_sshd_config
   systemctl reload ssh
