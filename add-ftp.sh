@@ -58,8 +58,12 @@ detect_websites() {
   fi | sort -u
 }
 
-detect_ftp_users() {
-  awk -F: '$3 >= 1000 && $3 != 65534 && $6 ~ "^/var/www/" && $7 == "/sbin/nologin" {print $1}' /etc/passwd 2>/dev/null || true
+detect_sftp_users() {
+  if getent group sftpusers >/dev/null 2>&1; then
+    getent group sftpusers | cut -d: -f4 | tr ',' '\n' | sort -u || true
+  else
+    awk -F: '$3 >= 1000 && $3 != 65534 && $7 ~ "nologin$" {print $1}' /etc/passwd 2>/dev/null || true
+  fi
 }
 
 select_website() {
@@ -89,68 +93,52 @@ select_website() {
   echo "${websites[$((choice-1))]}"
 }
 
-get_ftp_username() {
-  read -p "FTP username (alphanumeric, 3-16 chars): " username >&2
+get_sftp_username() {
+  read -p "SFTP username (alphanumeric, 3-16 chars): " username >&2
 
   if ! [[ "$username" =~ ^[a-zA-Z0-9]{3,16}$ ]]; then
     log error "Invalid username format (must be 3-16 alphanumeric characters)"
-    get_ftp_username
+    get_sftp_username
     return
   fi
 
   if id "$username" &>/dev/null; then
     log error "User '$username' already exists"
-    get_ftp_username
+    get_sftp_username
     return
   fi
 
   echo "$username"
 }
 
-get_ftp_password() {
-  read -sp "FTP password: " password >&2
+get_sftp_password() {
+  read -sp "SFTP password: " password >&2
   echo "" >&2
 
   if [[ -z "$password" ]]; then
     log error "Password cannot be empty"
-    get_ftp_password
+    get_sftp_password
     return
   fi
 
   echo "$password"
 }
 
-get_passive_port_range() {
-  read -p "Passive port range start (default: 50000): " port_start >&2
-  port_start=${port_start:-50000}
-
-  if ! [[ "$port_start" =~ ^[0-9]+$ ]] || [[ $port_start -lt 1024 ]] || [[ $port_start -gt 65435 ]]; then
-    log error "Invalid port number (must be 1024-65435)"
-    get_passive_port_range
-    return
-  fi
-
-  echo "$port_start"
-}
-
 confirm_all_changes() {
   local domain=$1
   local username=$2
-  local port_start=$3
-  local port_end=$((port_start + 100))
 
   echo "" >&2
   log info "Summary"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
   echo "Domain: $domain" >&2
-  echo "FTP Username: $username" >&2
-  echo "Home Directory: /var/www/$domain" >&2
-  echo "Access: Chroot jail (restricted to domain folder)" >&2
-  echo "FTP Control Port: 21/tcp" >&2
-  echo "Passive Port Range: $port_start-$port_end/tcp" >&2
+  echo "SFTP Username: $username" >&2
+  echo "Chroot Directory: /var/www/$domain" >&2
+  echo "SFTP Home: /$username" >&2
+  echo "SSH Port: 22/tcp" >&2
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
   echo "" >&2
-  read -p "Proceed with FTP user creation? (yes/no): " confirm >&2
+  read -p "Proceed with SFTP user creation? (yes/no): " confirm >&2
 
   if [[ ! "$confirm" =~ ^[Yy]([Ee][Ss])?$ ]]; then
     log error "Setup cancelled"
@@ -158,78 +146,98 @@ confirm_all_changes() {
   fi
 }
 
-install_vsftpd() {
-  if is_installed "vsftpd"; then
-    log success "vsftpd is already installed"
+install_openssh_server() {
+  if is_installed "openssh-server"; then
+    log success "OpenSSH server is already installed"
     return 0
   fi
 
-  log info "Installing vsftpd..."
+  log info "Installing OpenSSH server..."
   apt update
-  DEBIAN_FRONTEND=noninteractive apt install -y vsftpd
-  systemctl enable vsftpd
-  systemctl start vsftpd
+  DEBIAN_FRONTEND=noninteractive apt install -y openssh-server
+  systemctl enable ssh
+  systemctl start ssh
 
-  log success "vsftpd installed and started"
+  log success "OpenSSH server installed and started"
 }
 
-create_ftp_user() {
+ensure_sftp_group() {
+  if ! getent group sftpusers >/dev/null 2>&1; then
+    groupadd sftpusers
+    log success "Created sftpusers group"
+  fi
+}
+
+ensure_sshd_include_dir() {
+  if [[ -d /etc/ssh/sshd_config.d ]] && grep -q '^Include /etc/ssh/sshd_config.d/\*' /etc/ssh/sshd_config 2>/dev/null; then
+    return 0
+  fi
+
+  mkdir -p /etc/ssh/sshd_config.d
+  if ! grep -q '^Include /etc/ssh/sshd_config.d/\*' /etc/ssh/sshd_config 2>/dev/null; then
+    echo -e "\nInclude /etc/ssh/sshd_config.d/*" >> /etc/ssh/sshd_config
+  fi
+}
+
+configure_sshd_base() {
+  ensure_sshd_include_dir
+
+  local config_file="/etc/ssh/sshd_config.d/99-sftp.conf"
+  if ! grep -q '^Subsystem sftp internal-sftp' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null; then
+    cat > "$config_file" <<EOF
+# Managed by webserver-wizard
+Subsystem sftp internal-sftp
+
+Match Group sftpusers
+    ForceCommand internal-sftp
+    X11Forwarding no
+    AllowTcpForwarding no
+EOF
+    log success "Created SFTP sshd base configuration"
+  fi
+}
+
+validate_sshd_config() {
+  sshd -t >/dev/null 2>&1 || {
+    log error "sshd configuration validation failed"
+    return 1
+  }
+}
+
+create_sftp_user() {
   local username=$1
   local domain=$2
   local password=$3
-  local homedir="/var/www/$domain"
+  local domain_dir="/var/www/$domain"
+  local user_dir="$domain_dir/$username"
 
-  log info "Creating FTP user '$username'..."
+  log info "Creating SFTP user '$username'..."
 
-  useradd -m -d "$homedir" -s /sbin/nologin "$username"
+  mkdir -p "$domain_dir"
+  chown root:root "$domain_dir"
+  chmod 755 "$domain_dir"
+
+  useradd -M -d "/$username" -s /usr/sbin/nologin -G sftpusers -c "SFTP access to $domain" "$username"
   echo "$username:$password" | chpasswd
 
-  chown root:root "$homedir"
-  chmod 755 "$homedir"
+  mkdir -p "$user_dir"
+  chown "$username:sftpusers" "$user_dir"
+  chmod 755 "$user_dir"
 
-  log success "FTP user '$username' created with home directory $homedir"
-}
-
-configure_vsftpd() {
-  local username=$1
-  local port_start=$2
-  local port_end=$((port_start + 100))
-
-  log info "Configuring vsftpd..."
-
-  local backup_file="/etc/vsftpd.conf.backup.$(date +%s)"
-  cp /etc/vsftpd.conf "$backup_file"
-  log success "Backed up vsftpd.conf to $backup_file"
-
-  cat >> /etc/vsftpd.conf <<EOF
-
-# Configuration for FTP user: $username
-# Added: $(date)
-local_enable=YES
-write_enable=YES
-chroot_local_user=YES
-allow_writeable_chroot=YES
-pasv_enable=YES
-pasv_min_port=$port_start
-pasv_max_port=$port_end
-user_sub_token=\$USER
-local_root=/var/www/\$USER
+  local config_file="/etc/ssh/sshd_config.d/sftp-$username.conf"
+  cat > "$config_file" <<EOF
+# SFTP chroot for user $username
+Match User $username
+    ChrootDirectory $domain_dir
 EOF
 
-  vsftpd -v /etc/vsftpd.conf > /dev/null 2>&1 && log success "vsftpd configuration validated" || {
-    log error "vsftpd configuration validation failed"
-    cp "$backup_file" /etc/vsftpd.conf
-    return 1
-  }
+  validate_sshd_config
+  systemctl reload ssh
 
-  systemctl reload vsftpd
-  log success "vsftpd reloaded"
+  log success "SFTP user '$username' created and chrooted to $domain_dir"
 }
 
-setup_ftp_firewall() {
-  local port_start=$1
-  local port_end=$((port_start + 100))
-
+setup_sftp_firewall() {
   log info "Configuring firewall..."
 
   if ! command -v ufw &> /dev/null; then
@@ -237,59 +245,55 @@ setup_ftp_firewall() {
     apt install -y ufw
   fi
 
-  ufw allow 21/tcp 2>/dev/null || true
-  ufw allow "$port_start:$port_end/tcp" 2>/dev/null || true
-
-  log success "UFW: Allowed port 21/tcp and $port_start:$port_end/tcp"
+  ufw allow 22/tcp 2>/dev/null || true
+  log success "UFW: Allowed port 22/tcp"
 }
-
 show_status() {
   local username=$1
   local domain=$2
-  local port_start=$3
   local server_ip=$(hostname -I | awk '{print $1}')
 
   echo "" >&2
-  log success "FTP User Created Successfully!"
+  log success "SFTP User Created Successfully!"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
-  echo "FTP Connection Details:" >&2
+  echo "SFTP Connection Details:" >&2
   echo "  Host: $server_ip" >&2
   echo "  Username: $username" >&2
-  echo "  Home Directory: /var/www/$domain" >&2
-  echo "  Passive Port Range: $port_start-$((port_start + 100))" >&2
+  echo "  SFTP Home: /$username" >&2
+  echo "  Chroot Directory: /var/www/$domain" >&2
   echo "" >&2
   echo "Useful commands:" >&2
-  echo "  • List FTP users: sudo awk -F: '\$3 >= 1000 {print \$1}' /etc/passwd | grep ftp" >&2
-  echo "  • Delete FTP user: sudo userdel -r '$username'" >&2
-  echo "  • View vsftpd logs: sudo tail -f /var/log/vsftpd.log" >&2
-  echo "  • Reload vsftpd: sudo systemctl reload vsftpd" >&2
+  echo "  • List SFTP users: sudo getent group sftpusers | cut -d: -f4 | tr ',' '\n'" >&2
+  echo "  • Delete SFTP user: sudo userdel '$username'" >&2
+  echo "  • View SSH logs: sudo tail -f /var/log/auth.log | grep sshd" >&2
+  echo "  • Reload SSH: sudo systemctl reload ssh" >&2
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
 }
 
-select_existing_ftp_user() {
-  local ftp_users
-  mapfile -t ftp_users < <(detect_ftp_users)
+select_existing_sftp_user() {
+  local sftp_users
+  mapfile -t sftp_users < <(detect_sftp_users)
 
-  if [[ ${#ftp_users[@]} -eq 0 ]]; then
-    log error "No FTP users found"
+  if [[ ${#sftp_users[@]} -eq 0 ]]; then
+    log error "No SFTP users found"
     return 1
   fi
 
   echo "" >&2
-  log info "Existing FTP users:"
-  for ((i=0; i<${#ftp_users[@]}; i++)); do
-    echo "$((i+1))) ${ftp_users[$i]}" >&2
+  log info "Existing SFTP users:"
+  for ((i=0; i<${#sftp_users[@]}; i++)); do
+    echo "$((i+1))) ${sftp_users[$i]}" >&2
   done
 
-  read -p "Select user (1-${#ftp_users[@]}): " choice >&2
+  read -p "Select user (1-${#sftp_users[@]}): " choice >&2
 
-  if ! [[ "$choice" =~ ^[0-9]+$ ]] || [[ $choice -lt 1 ]] || [[ $choice -gt ${#ftp_users[@]} ]]; then
+  if ! [[ "$choice" =~ ^[0-9]+$ ]] || [[ $choice -lt 1 ]] || [[ $choice -gt ${#sftp_users[@]} ]]; then
     log error "Invalid selection"
-    select_existing_ftp_user
+    select_existing_sftp_user
     return
   fi
 
-  echo "${ftp_users[$((choice-1))]}"
+  echo "${sftp_users[$((choice-1))]}"
 }
 
 modify_user_access() {
@@ -306,40 +310,40 @@ modify_user_access() {
     return 1
   fi
 
-  log info "Updating vsftpd configuration..."
+  local domain_dir="/var/www/$domain"
 
-  local backup_file="/etc/vsftpd.conf.backup.$(date +%s)"
-  cp /etc/vsftpd.conf "$backup_file"
-  log success "Backed up vsftpd.conf to $backup_file"
+  log info "Updating SFTP configuration for '$username'..."
+  mkdir -p "$domain_dir"
+  chown root:root "$domain_dir"
+  chmod 755 "$domain_dir"
 
-  sed -i "/^# Configuration for FTP user: $username/,/^local_root/d" /etc/vsftpd.conf
-  sed -i "/user_sub_token=/d" /etc/vsftpd.conf
+  mkdir -p "$domain_dir/$username"
+  chown "$username:sftpusers" "$domain_dir/$username"
+  chmod 755 "$domain_dir/$username"
 
-  cat >> /etc/vsftpd.conf <<EOF
-
-# Configuration for FTP user: $username
-# Modified: $(date)
-user_sub_token=\$USER
-local_root=/var/www/\$USER
+  local config_file="/etc/ssh/sshd_config.d/sftp-$username.conf"
+  cat > "$config_file" <<EOF
+# SFTP chroot for user $username
+Match User $username
+    ChrootDirectory $domain_dir
 EOF
 
-  vsftpd -v /etc/vsftpd.conf > /dev/null 2>&1 && log success "vsftpd configuration validated" || {
-    log error "vsftpd configuration validation failed"
-    cp "$backup_file" /etc/vsftpd.conf
-    return 1
-  }
-
-  chown root:root "/var/www/$domain"
-  chmod 755 "/var/www/$domain"
-
-  systemctl reload vsftpd
+  validate_sshd_config
+  systemctl reload ssh
   log success "User '$username' now has access to $domain"
 }
 
-delete_ftp_user() {
+delete_sftp_user() {
   local username=$1
 
-  log info "Deleting FTP user '$username'..."
+  log info "Deleting SFTP user '$username'..."
+
+  local config_file="/etc/ssh/sshd_config.d/sftp-$username.conf"
+  local chroot_dir=""
+
+  if [[ -f "$config_file" ]]; then
+    chroot_dir=$(grep -i 'ChrootDirectory' "$config_file" | awk '{print $2}')
+  fi
 
   local user_home
   user_home=$(getent passwd "$username" | cut -d: -f6)
@@ -348,6 +352,9 @@ delete_ftp_user() {
   log warn "Confirm deletion:"
   echo "  Username: $username" >&2
   echo "  Home Directory: $user_home" >&2
+  if [[ -n "$chroot_dir" ]]; then
+    echo "  Chroot Directory: $chroot_dir" >&2
+  fi
   echo "" >&2
   read -p "Delete this user? (yes/no): " confirm >&2
 
@@ -356,26 +363,24 @@ delete_ftp_user() {
     return 0
   fi
 
-  userdel -r "$username" 2>/dev/null || log warn "Failed to completely remove user files"
+  userdel "$username" 2>/dev/null || log warn "Failed to remove user account"
+  rm -f "$config_file"
 
-  log info "Cleaning up vsftpd configuration..."
-  sed -i "/^# Configuration for FTP user: $username/,/^local_root/d" /etc/vsftpd.conf
+  if [[ -n "$chroot_dir" ]]; then
+    rm -rf "$chroot_dir/$username" || true
+  fi
 
-  vsftpd -v /etc/vsftpd.conf > /dev/null 2>&1 && log success "vsftpd configuration validated" || {
-    log error "vsftpd configuration validation failed"
-    return 1
-  }
-
-  systemctl reload vsftpd
-  log success "FTP user '$username' deleted successfully"
+  validate_sshd_config
+  systemctl reload ssh
+  log success "SFTP user '$username' deleted successfully"
 }
 
 select_operation() {
   echo "" >&2
-  log info "FTP Account Manager"
-  echo "1) Create new FTP user" >&2
+  log info "SFTP Account Manager"
+  echo "1) Create new SFTP user" >&2
   echo "2) Modify user's website access" >&2
-  echo "3) Delete FTP user" >&2
+  echo "3) Delete SFTP user" >&2
   echo "" >&2
   read -p "Select operation (1-3): " choice >&2
 
@@ -390,7 +395,7 @@ select_operation() {
 create_new_user() {
   local webserver=$1
 
-  log info "Create New FTP User"
+  log info "Create New SFTP User"
 
   local domain
   domain=$(select_website "$webserver")
@@ -401,22 +406,20 @@ create_new_user() {
   fi
 
   local username
-  username=$(get_ftp_username)
+  username=$(get_sftp_username)
 
   local password
-  password=$(get_ftp_password)
+  password=$(get_sftp_password)
 
-  local port_start
-  port_start=$(get_passive_port_range)
+  confirm_all_changes "$domain" "$username"
 
-  confirm_all_changes "$domain" "$username" "$port_start"
+  install_openssh_server
+  ensure_sftp_group
+  configure_sshd_base
+  create_sftp_user "$username" "$domain" "$password"
+  setup_sftp_firewall
 
-  install_vsftpd
-  create_ftp_user "$username" "$domain" "$password"
-  configure_vsftpd "$username" "$port_start"
-  setup_ftp_firewall "$port_start"
-
-  show_status "$username" "$domain" "$port_start"
+  show_status "$username" "$domain"
 }
 
 ascii_art(){
@@ -430,7 +433,7 @@ ascii_art(){
 main() {
   require_root
   ascii_art
-  log info "FTP Account Manager"
+  log info "SFTP Account Manager"
   echo "" >&2
 
   local webserver
@@ -443,11 +446,11 @@ main() {
 
   log success "Detected webserver: $webserver"
 
-  local existing_ftp_users
-  existing_ftp_users=$(detect_ftp_users)
-  if [[ -n "$existing_ftp_users" ]]; then
+  local existing_sftp_users
+  existing_sftp_users=$(detect_sftp_users)
+  if [[ -n "$existing_sftp_users" ]]; then
     echo "" >&2
-    log info "Existing FTP users: $(echo "$existing_ftp_users" | tr '\n' ', ' | sed 's/,$//')"
+    log info "Existing SFTP users: $(echo "$existing_sftp_users" | tr '\n' ', ' | sed 's/,$//')"
   fi
 
   local operation
@@ -459,13 +462,13 @@ main() {
       ;;
     modify)
       local username
-      username=$(select_existing_ftp_user) || exit 1
+      username=$(select_existing_sftp_user) || exit 1
       modify_user_access "$webserver" "$username"
       ;;
     delete)
       local username
-      username=$(select_existing_ftp_user) || exit 1
-      delete_ftp_user "$username"
+      username=$(select_existing_sftp_user) || exit 1
+      delete_sftp_user "$username"
       ;;
   esac
 }
