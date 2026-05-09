@@ -182,18 +182,13 @@ ensure_sshd_include_dir() {
 configure_sshd_base() {
   ensure_sshd_include_dir
 
-  local config_file="/etc/ssh/sshd_config.d/99-sftp.conf"
+  local config_file="/etc/ssh/sshd_config.d/00-sftp-subsystem.conf"
   if ! grep -q '^Subsystem sftp internal-sftp' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null; then
     cat > "$config_file" <<EOF
-# Managed by webserver-wizard
-Subsystem sftp internal-sftp
-
-Match Group sftpusers
-    ForceCommand internal-sftp
-    X11Forwarding no
-    AllowTcpForwarding no
+# Managed by webserver-wizard - SFTP subsystem definition
+Subsystem sftp internal-sftp -f SYSLOG -l INFO
 EOF
-    log success "Created SFTP sshd base configuration"
+    log success "Created SFTP subsystem configuration"
   fi
 }
 
@@ -227,11 +222,23 @@ create_sftp_user() {
   local config_file="/etc/ssh/sshd_config.d/sftp-$username.conf"
   cat > "$config_file" <<EOF
 # SFTP chroot for user $username
+# Managed by webserver-wizard
 Match User $username
     ChrootDirectory $domain_dir
+    ForceCommand internal-sftp
+    AllowTcpForwarding no
+    AllowAgentForwarding no
+    PermitTTY no
+    X11Forwarding no
 EOF
 
-  validate_sshd_config
+  validate_sshd_config || {
+    log error "SSH config validation failed for user $username"
+    rm -f "$config_file"
+    userdel "$username" 2>/dev/null || true
+    return 1
+  }
+
   systemctl reload ssh
 
   log success "SFTP user '$username' created and chrooted to $domain_dir"
@@ -324,8 +331,14 @@ modify_user_access() {
   local config_file="/etc/ssh/sshd_config.d/sftp-$username.conf"
   cat > "$config_file" <<EOF
 # SFTP chroot for user $username
+# Managed by webserver-wizard
 Match User $username
     ChrootDirectory $domain_dir
+    ForceCommand internal-sftp
+    AllowTcpForwarding no
+    AllowAgentForwarding no
+    PermitTTY no
+    X11Forwarding no
 EOF
 
   validate_sshd_config
