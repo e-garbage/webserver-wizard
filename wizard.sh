@@ -464,6 +464,8 @@ Include /etc/ssh/sshd_config.d/*.conf
 Port 22
 PermitRootLogin no
 PasswordAuthentication yes
+PubkeyAuthentication yes
+PermitEmptyPasswords no
 MaxAuthTries 6
 KbdInteractiveAuthentication no
 UsePAM yes
