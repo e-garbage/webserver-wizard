@@ -98,22 +98,48 @@ select_webserver() {
   fi
 }
 
+# Outputs nothing if the user chooses to keep the existing sites only
 get_websites() {
   local webserver=$1
+
+  local existing_sites=()
+  local site
+  while IFS= read -r site; do
+    # Ignore the distro default sites, they are not user domains
+    [[ -n "$site" && "$site" != "default" && "$site" != "000-default" ]] && existing_sites+=("$site")
+  done < <(detect_existing_sites "$webserver")
+
+  if [[ ${#existing_sites[@]} -gt 0 ]]; then
+    echo "" >&2
+    log info "Existing domain configurations found:"
+    for site in "${existing_sites[@]}"; do
+      echo "  • $site" >&2
+    done
+    echo "1) Add new domains" >&2
+    echo "2) Skip this step (keep existing domains only)" >&2
+
+    local choice
+    while true; do
+      read -p "Select option (1-2): " choice >&2
+      case $choice in
+        1) break ;;
+        2) log info "Keeping existing domains, no new site will be created"; return 0 ;;
+        *) log error "Invalid choice" ;;
+      esac
+    done
+  fi
+
+  ask_new_websites
+}
+
+ask_new_websites() {
   local websites=()
 
   read -p "How many websites to setup? " num_sites >&2
   if ! [[ "$num_sites" =~ ^[0-9]+$ ]] || [[ $num_sites -lt 1 ]]; then
     log error "Please enter a valid number (≥1)"
-    get_websites "$webserver"
+    ask_new_websites
     return
-  fi
-
-  local existing_sites
-  existing_sites=$(detect_existing_sites "$webserver")
-
-  if [[ -n "$existing_sites" ]]; then
-    log warn "Existing sites: $existing_sites"
   fi
 
   for ((i=1; i<=num_sites; i++)); do
@@ -266,6 +292,9 @@ confirm_all_changes() {
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "Webserver: $webserver"
   echo "Websites:"
+  if [[ ${#websites[@]} -eq 0 ]]; then
+    echo "  none (keeping existing domains)"
+  fi
   for domain in "${websites[@]}"; do
     echo "  • $domain → /var/www/$domain/html"
   done
@@ -759,6 +788,9 @@ show_status() {
 
   echo ""
   echo "Websites configured:"
+  if [[ ${#websites[@]} -eq 0 ]]; then
+    echo "  none (existing domains kept as they were)"
+  fi
   for domain in "${websites[@]}"; do
     echo "  • $domain"
     echo "    Root: /var/www/$domain/html"
@@ -828,8 +860,11 @@ main() {
   local ssh_password
   ssh_password=$(get_ssh_password_choice)
 
-  local https_email
-  https_email=$(get_https_email)
+  # HTTPS is only offered for new domains. Existing ones: certbot --nginx/--apache -d <domain>
+  local https_email=""
+  if [[ ${#websites[@]} -gt 0 ]]; then
+    https_email=$(get_https_email)
+  fi
 
   confirm_all_changes "$webserver" "${firewall_ports[*]:-}" "$ssh_password" "$https_email" "${websites[@]}"
 
