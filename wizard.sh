@@ -162,15 +162,22 @@ get_firewall_config() {
   log info "UFW Firewall Configuration"
   echo "By default, ports $SSH_PORT (SSH, rate-limited), 80 (HTTP) and 443 (HTTPS) will be open." >&2
   echo "1) Use default ($SSH_PORT, 80, 443 only)" >&2
-  echo "2) Customize open ports (SSH port $SSH_PORT is always kept open)" >&2
+  echo "2) Customize open ports" >&2
   read -p "Select option (1-2): " choice >&2
 
-  local ports=("80" "443")
+  local ports=("$SSH_PORT" "80" "443")
 
   if [[ "$choice" == "2" ]]; then
-    read -p "Enter comma-separated ports to open (e.g., 80,443,3000): " custom_ports >&2
+    read -p "Enter comma-separated ports to open (e.g., $SSH_PORT,80,443,3000): " custom_ports >&2
     IFS=',' read -ra ports <<< "$custom_ports"
 
+    if [[ ${#ports[@]} -eq 0 ]]; then
+      log error "Please enter at least one port"
+      get_firewall_config
+      return
+    fi
+
+    local ssh_included="no"
     for i in "${!ports[@]}"; do
       ports[$i]=$(echo "${ports[$i]}" | xargs)
       if ! [[ "${ports[$i]}" =~ ^[0-9]{1,5}$ ]] || (( 10#${ports[$i]} < 1 || 10#${ports[$i]} > 65535 )); then
@@ -179,17 +186,24 @@ get_firewall_config() {
         return
       fi
       ports[$i]=$((10#${ports[$i]}))
+      [[ "${ports[$i]}" == "$SSH_PORT" ]] && ssh_included="yes"
     done
+
+    if [[ "$ssh_included" == "no" ]]; then
+      echo "" >&2
+      log warn "Port $SSH_PORT (SSH) is NOT in your list!"
+      log warn "Once the firewall is enabled, new SSH connections to this server will be blocked."
+      log warn "If you are connected over SSH, you could lose access to this server"
+      log warn "(only your hosting provider's web console would still work)."
+      if ! ask_yes_no "Are you sure you want to close port $SSH_PORT?" "n" >&2; then
+        get_firewall_config
+        return
+      fi
+    fi
   fi
 
-  # SSH is handled separately (always allowed + rate-limited) to avoid lockouts
-  local port
-  for port in "${ports[@]}"; do
-    [[ "$port" != "$SSH_PORT" ]] && echo "$port"
-  done
-  return 0
+  printf '%s\n' "${ports[@]}"
 }
-
 # Decide whether SSH password login can safely be disabled for admin users.
 # Outputs "no" (disable passwords) or "yes" (keep passwords).
 get_ssh_password_choice() {
@@ -298,7 +312,10 @@ confirm_all_changes() {
   for domain in "${websites[@]}"; do
     echo "  • $domain → /var/www/$domain/html"
   done
-  echo "Firewall: UFW enabled, SSH $SSH_PORT (rate-limited) + ports: ${ports:-none}"
+  echo "Firewall: UFW enabled, open ports: ${ports:-none}"
+  if [[ " $ports " != *" $SSH_PORT "* ]]; then
+    echo "  ⚠ SSH port $SSH_PORT will NOT be opened"
+  fi
   if [[ "$ssh_password" == "no" ]]; then
     echo "SSH: key-only login for admins, root login disabled"
   else
@@ -604,20 +621,21 @@ setup_ufw() {
   ufw default deny incoming >/dev/null
   ufw default allow outgoing >/dev/null
 
-  # Allow SSH BEFORE enabling the firewall, so the current session is never cut.
-  # "limit" blocks IPs making 6+ connection attempts in 30 seconds.
-  ufw limit "$SSH_PORT/tcp" comment 'SSH (rate-limited)' >/dev/null
-  log success "UFW: Allowed port $SSH_PORT/tcp (rate-limited)"
-
+  # Rules are added BEFORE enabling the firewall, so an allowed SSH session is never cut.
   for port in "${ports[@]}"; do
-    ufw allow "$port/tcp" >/dev/null
-    log success "UFW: Allowed port $port/tcp"
+    if [[ "$port" == "$SSH_PORT" ]]; then
+      # "limit" blocks IPs making 6+ connection attempts in 30 seconds
+      ufw limit "$port/tcp" comment 'SSH (rate-limited)' >/dev/null
+      log success "UFW: Allowed port $port/tcp (SSH, rate-limited)"
+    else
+      ufw allow "$port/tcp" >/dev/null
+      log success "UFW: Allowed port $port/tcp"
+    fi
   done
 
   ufw --force enable >/dev/null
   log success "UFW firewall enabled"
 }
-
 setup_ssh() {
   local password_auth=$1
 
