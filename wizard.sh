@@ -77,22 +77,26 @@ select_webserver() {
     log info "Detected existing webserver: $existing"
     echo "1) Continue with $existing" >&2
     echo "2) Switch to $([ "$existing" = "nginx" ] && echo "apache2" || echo "nginx")" >&2
-    read -p "Select option (1-2): " choice
+    echo "3) Skip webserver setup (leave $existing untouched, no websites)" >&2
+    read -p "Select option (1-3): " choice
 
     case $choice in
       1) echo "$existing" ;;
       2) [ "$existing" = "nginx" ] && echo "apache2" || echo "nginx" ;;
+      3) echo "none" ;;
       *) log error "Invalid choice"; select_webserver ;;
     esac
   else
     log info "No webserver detected"
     echo "1) nginx (recommended - faster, lighter)" >&2
     echo "2) apache2 (traditional, more modules)" >&2
-    read -p "Select webserver (1-2): " choice
+    echo "3) None (skip webserver install, only system/firewall/SSH setup)" >&2
+    read -p "Select webserver (1-3): " choice
 
     case $choice in
       1) echo "nginx" ;;
       2) echo "apache2" ;;
+      3) echo "none" ;;
       *) log error "Invalid choice"; select_webserver ;;
     esac
   fi
@@ -157,15 +161,22 @@ ask_new_websites() {
   printf '%s\n' "${websites[@]}"
 }
 
+# Usage: get_firewall_config <webserver>  ("none" -> only SSH is open by default)
 get_firewall_config() {
+  local webserver=${1:-}
+  local ports=("$SSH_PORT" "80" "443")
+  [[ "$webserver" == "none" ]] && ports=("$SSH_PORT")
+
   echo "" >&2
   log info "UFW Firewall Configuration"
-  echo "By default, ports $SSH_PORT (SSH, rate-limited), 80 (HTTP) and 443 (HTTPS) will be open." >&2
-  echo "1) Use default ($SSH_PORT, 80, 443 only)" >&2
+  if [[ "$webserver" == "none" ]]; then
+    echo "By default, only port $SSH_PORT (SSH, rate-limited) will be open." >&2
+  else
+    echo "By default, ports $SSH_PORT (SSH, rate-limited), 80 (HTTP) and 443 (HTTPS) will be open." >&2
+  fi
+  echo "1) Use default (${ports[*]} only)" >&2
   echo "2) Customize open ports" >&2
   read -p "Select option (1-2): " choice >&2
-
-  local ports=("$SSH_PORT" "80" "443")
 
   if [[ "$choice" == "2" ]]; then
     read -p "Enter comma-separated ports to open (e.g., $SSH_PORT,80,443,3000): " custom_ports >&2
@@ -173,7 +184,7 @@ get_firewall_config() {
 
     if [[ ${#ports[@]} -eq 0 ]]; then
       log error "Please enter at least one port"
-      get_firewall_config
+      get_firewall_config "$webserver"
       return
     fi
 
@@ -182,7 +193,7 @@ get_firewall_config() {
       ports[$i]=$(echo "${ports[$i]}" | xargs)
       if ! [[ "${ports[$i]}" =~ ^[0-9]{1,5}$ ]] || (( 10#${ports[$i]} < 1 || 10#${ports[$i]} > 65535 )); then
         log error "Invalid port: ${ports[$i]} (must be 1-65535)"
-        get_firewall_config
+        get_firewall_config "$webserver"
         return
       fi
       ports[$i]=$((10#${ports[$i]}))
@@ -196,7 +207,7 @@ get_firewall_config() {
       log warn "If you are connected over SSH, you could lose access to this server"
       log warn "(only your hosting provider's web console would still work)."
       if ! ask_yes_no "Are you sure you want to close port $SSH_PORT?" "n" >&2; then
-        get_firewall_config
+        get_firewall_config "$webserver"
         return
       fi
     fi
@@ -304,10 +315,14 @@ confirm_all_changes() {
   echo ""
   log info "Summary of Changes"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "Webserver: $webserver"
-  echo "Websites:"
-  if [[ ${#websites[@]} -eq 0 ]]; then
-    echo "  none (keeping existing domains)"
+  if [[ "$webserver" == "none" ]]; then
+    echo "Webserver: none (skipped)"
+  else
+    echo "Webserver: $webserver"
+    echo "Websites:"
+    if [[ ${#websites[@]} -eq 0 ]]; then
+      echo "  none (keeping existing domains)"
+    fi
   fi
   for domain in "${websites[@]}"; do
     echo "  • $domain → /var/www/$domain/html"
@@ -323,12 +338,15 @@ confirm_all_changes() {
   fi
   echo "HTTPS: $([[ -n "$https_email" ]] && echo "Let's Encrypt certificates ($https_email)" || echo "skipped")"
   echo "Actions:"
-  echo "  1) Update system (apt upgrade) + enable automatic security updates"
-  echo "  2) Install/verify and harden webserver"
-  echo "  3) Create website folders and configs"
-  echo "  4) Enable UFW firewall"
-  echo "  5) Harden SSH + install fail2ban"
-  [[ -n "$https_email" ]] && echo "  6) Request HTTPS certificates"
+  local step=1
+  echo "  $((step++))) Update system (apt upgrade) + enable automatic security updates"
+  if [[ "$webserver" != "none" ]]; then
+    echo "  $((step++))) Install/verify and harden webserver"
+    echo "  $((step++))) Create website folders and configs"
+  fi
+  echo "  $((step++))) Enable UFW firewall"
+  echo "  $((step++))) Harden SSH + install fail2ban"
+  [[ -n "$https_email" ]] && echo "  $((step++))) Request HTTPS certificates"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo ""
   read -p "Proceed with setup? (yes/no): " confirm
@@ -795,25 +813,29 @@ show_status() {
   echo ""
   log success "Setup Complete!"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "Webserver: $webserver"
-  echo "Status:"
-
-  if [[ "$webserver" == "nginx" ]]; then
-    systemctl is-active nginx > /dev/null 2>&1 && echo "  nginx: $(systemctl is-active nginx)" || echo "  nginx: inactive"
+  if [[ "$webserver" == "none" ]]; then
+    echo "Webserver: none (skipped)"
   else
-    systemctl is-active apache2 > /dev/null 2>&1 && echo "  apache2: $(systemctl is-active apache2)" || echo "  apache2: inactive"
-  fi
+    echo "Webserver: $webserver"
+    echo "Status:"
 
-  echo ""
-  echo "Websites configured:"
-  if [[ ${#websites[@]} -eq 0 ]]; then
-    echo "  none (existing domains kept as they were)"
+    if [[ "$webserver" == "nginx" ]]; then
+      systemctl is-active nginx > /dev/null 2>&1 && echo "  nginx: $(systemctl is-active nginx)" || echo "  nginx: inactive"
+    else
+      systemctl is-active apache2 > /dev/null 2>&1 && echo "  apache2: $(systemctl is-active apache2)" || echo "  apache2: inactive"
+    fi
+
+    echo ""
+    echo "Websites configured:"
+    if [[ ${#websites[@]} -eq 0 ]]; then
+      echo "  none (existing domains kept as they were)"
+    fi
+    for domain in "${websites[@]}"; do
+      echo "  • $domain"
+      echo "    Root: /var/www/$domain/html"
+      echo "    Access: $scheme://$domain"
+    done
   fi
-  for domain in "${websites[@]}"; do
-    echo "  • $domain"
-    echo "    Root: /var/www/$domain/html"
-    echo "    Access: $scheme://$domain"
-  done
 
   echo ""
   echo "Firewall:"
@@ -824,14 +846,14 @@ show_status() {
   if [[ "$webserver" == "nginx" ]]; then
     echo "  • View config: less /etc/nginx/sites-available/<domain>"
     echo "  • Reload: systemctl reload nginx"
-  else
+  elif [[ "$webserver" == "apache2" ]]; then
     echo "  • View config: less /etc/apache2/sites-available/<domain>.conf"
     echo "  • Reload: systemctl reload apache2"
   fi
   echo "  • View firewall: sudo ufw status"
   echo "  • Effective SSH config: sudo sshd -T | less"
   echo "  • Banned IPs: sudo fail2ban-client status sshd"
-  echo "  • Fix site permissions: sudo chown -R \$USER:www-data /var/www/<domain>/html"
+  [[ "$webserver" != "none" ]] && echo "  • Fix site permissions: sudo chown -R \$USER:www-data /var/www/<domain>/html"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 }
 
@@ -861,15 +883,20 @@ main() {
   local webserver
   webserver=$(select_webserver)
 
-  local websites_output
-  websites_output=$(get_websites "$webserver")
+  # "none" = skip everything webserver related (install, hardening, sites, HTTPS)
   local websites=()
-  while IFS= read -r line; do
-    [[ -n "$line" ]] && websites+=("$line")
-  done <<< "$websites_output"
+  if [[ "$webserver" == "none" ]]; then
+    log info "Skipping webserver setup, continuing with the system configuration"
+  else
+    local websites_output
+    websites_output=$(get_websites "$webserver")
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && websites+=("$line")
+    done <<< "$websites_output"
+  fi
 
   local firewall_output
-  firewall_output=$(get_firewall_config)
+  firewall_output=$(get_firewall_config "$webserver")
   local firewall_ports=()
   while IFS= read -r line; do
     [[ -n "$line" ]] && firewall_ports+=("$line")
@@ -888,17 +915,19 @@ main() {
 
   update_system
   setup_auto_updates
-  install_webserver "$webserver"
-  harden_webserver "$webserver"
+  if [[ "$webserver" != "none" ]]; then
+    install_webserver "$webserver"
+    harden_webserver "$webserver"
 
-  for domain in "${websites[@]}"; do
-    local action
-    action=$(prompt_on_conflict "$domain" "$webserver")
-    create_folders "$domain" "$action"
-    setup_webserver_config "$webserver" "$domain" "$action"
-  done
+    for domain in "${websites[@]}"; do
+      local action
+      action=$(prompt_on_conflict "$domain" "$webserver")
+      create_folders "$domain" "$action"
+      setup_webserver_config "$webserver" "$domain" "$action"
+    done
 
-  reload_webserver "$webserver"
+    reload_webserver "$webserver"
+  fi
   setup_ufw "${firewall_ports[@]}"
   setup_ssh "$ssh_password"
   setup_fail2ban

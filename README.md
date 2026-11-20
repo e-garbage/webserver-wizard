@@ -36,7 +36,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/e-garbage/webserver-wizard/m
 ```
 
 # What it does
-- Install Nginx or Apache2
+- Install Nginx or Apache2 (or skip the webserver entirely and only run the system, firewall and SSH setup)
 - setup as many domaine as you want under `/var/www/<domaine>/html`
 - harden the webserver: hide version number, add security headers, block hidden files (`.git`, `.env`...), disable directory listing, drop requests for unknown hostnames / the bare IP
 - optionally get free HTTPS certificates from Let's Encrypt (certbot), with HTTP → HTTPS redirect and auto-renewal
