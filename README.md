@@ -40,13 +40,14 @@ bash <(curl -fsSL https://raw.githubusercontent.com/e-garbage/webserver-wizard/m
 - setup as many domaine as you want under `/var/www/<domaine>/html`
 - harden the webserver: hide version number, add security headers, block hidden files (`.git`, `.env`...), disable directory listing, drop requests for unknown hostnames / the bare IP
 - optionally get free HTTPS certificates from Let's Encrypt (certbot), with HTTP → HTTPS redirect and auto-renewal
-- setup UFW firewall (closes every port except 80, 443 and SSH 22, which is always kept open and rate-limited)
+- choose the SSH port (default: the current one, usually 22); UFW, sshd and fail2ban all follow it, including Ubuntu's socket-activated `ssh.socket`
+- setup UFW firewall (closes every port except 80, 443 and the SSH port, which is kept open and rate-limited)
 - harden SSH: root login disabled, password login disabled if you already have an SSH key (SFTP users from `add-sftp.sh` can still use passwords), config validated with `sshd -t` and backed up before changes
 - install fail2ban to ban IPs that brute-force SSH
 - update host system and enable automatic security updates
 - set safe permissions on the created folder tree
 
-> **⚠️ SSH:** if you have an SSH key, password login gets disabled. Before closing your current session, open a **new** terminal and check you can still log in.
+> **⚠️ SSH:** if you have an SSH key, password login gets disabled. Before closing your current session, open a **new** terminal and check you can still log in. If you changed the SSH port, use `ssh -p <port> <user>@<server>`, open the port in your hosting provider's firewall too, and remove the old port from UFW once the new one works.
 
 # Tips
 Site files belong to your user, with the `www-data` group. The webserver only needs to *read* them: if it could write them, a hacked webserver could change your website.

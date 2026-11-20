@@ -19,6 +19,16 @@ log() {
   esac
 }
 
+# Port sshd is configured with (wizard.sh may have changed it from 22)
+detect_ssh_port() {
+  local port=""
+  if command -v sshd &> /dev/null; then
+    mkdir -p /run/sshd
+    port=$(sshd -T 2>/dev/null | awk '$1 == "port" { print $2; exit }') || port=""
+  fi
+  echo "${port:-22}"
+}
+
 require_root() {
   if [[ $EUID -ne 0 ]]; then
     log error "This script must be run as root (use: sudo $0)"
@@ -134,7 +144,7 @@ confirm_all_changes() {
   echo "Domain: $domain" >&2
   echo "SFTP Username: $username" >&2
   echo "Access Directory: /var/www/$domain" >&2
-  echo "SSH Port: 22/tcp" >&2
+  echo "SSH Port: $(detect_ssh_port)/tcp" >&2
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
   echo "" >&2
   read -p "Proceed with SFTP user creation? (yes/no): " confirm >&2
@@ -257,8 +267,11 @@ setup_sftp_firewall() {
     apt install -y ufw
   fi
 
-  ufw allow 22/tcp 2>/dev/null || true
-  log success "UFW: Allowed port 22/tcp"
+  local port
+  port=$(detect_ssh_port)
+  # "limit" (same rule wizard.sh uses); "allow" would replace its rate limit
+  ufw limit "$port/tcp" comment 'SSH (rate-limited)' >/dev/null 2>&1 || true
+  log success "UFW: Allowed port $port/tcp (SSH, rate-limited)"
 }
 show_status() {
   local username=$1
@@ -271,6 +284,7 @@ show_status() {
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
   echo "SFTP Connection Details:" >&2
   echo "  Host: $server_ip" >&2
+  echo "  Port: $(detect_ssh_port)" >&2
   echo "  Username: $username" >&2
   echo "  Chroot root: /var/www/$domain" >&2
   echo "  Visible SFTP root inside the jail: /" >&2

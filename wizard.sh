@@ -7,7 +7,8 @@ COLOR_BLUE='\033[0;34m'
 COLOR_YELLOW='\033[1;33m'
 COLOR_RESET='\033[0m'
 
-SSH_PORT="22"
+SSH_PORT="22"          # set by get_ssh_port
+CURRENT_SSH_PORT="22"  # port sshd uses before the wizard runs
 SSH_HARDENING_FILE="/etc/ssh/sshd_config.d/00-webserver-wizard.conf"
 
 log() {
@@ -159,6 +160,63 @@ ask_new_websites() {
   done
 
   printf '%s\n' "${websites[@]}"
+}
+
+# Port sshd is configured with right now (falls back to 22)
+detect_ssh_port() {
+  local port=""
+  if command -v sshd &> /dev/null; then
+    mkdir -p /run/sshd
+    port=$(sshd -T 2>/dev/null | awk '$1 == "port" { print $2; exit }') || port=""
+  fi
+  echo "${port:-22}"
+}
+
+# Sets the globals SSH_PORT and CURRENT_SSH_PORT.
+# Must NOT be called in a subshell ($(...)), or the globals are lost.
+# Usage: get_ssh_port <webserver>
+get_ssh_port() {
+  local webserver=${1:-}
+  CURRENT_SSH_PORT=$(detect_ssh_port)
+
+  echo "" >&2
+  log info "SSH Port"
+  echo "SSH currently uses port $CURRENT_SSH_PORT." >&2
+  echo "A non-standard port (e.g. 2222) cuts down on automated login attempts." >&2
+
+  local port
+  while true; do
+    read -p "SSH port [$CURRENT_SSH_PORT]: " port >&2
+    port=$(echo "${port:-$CURRENT_SSH_PORT}" | xargs)
+
+    if ! [[ "$port" =~ ^[0-9]{1,5}$ ]] || (( 10#$port < 1 || 10#$port > 65535 )); then
+      log error "Invalid port: $port (must be 1-65535)"
+      continue
+    fi
+    port=$((10#$port))
+
+    if [[ "$webserver" != "none" ]] && [[ "$port" == "80" || "$port" == "443" ]]; then
+      log error "Port $port is needed by the webserver, pick another one"
+      continue
+    fi
+
+    # Refuse ports another program already listens on (sshd/systemd socket are fine)
+    local listeners
+    listeners=$(ss -Hltnp "sport = :$port" 2>/dev/null || true)
+    if [[ -n "$listeners" ]] && ! grep -qE '"(sshd|systemd)"' <<< "$listeners"; then
+      log error "Port $port is already used by another program:"
+      echo "$listeners" >&2
+      continue
+    fi
+    break
+  done
+
+  SSH_PORT="$port"
+  if [[ "$SSH_PORT" != "$CURRENT_SSH_PORT" ]]; then
+    log warn "SSH will move from port $CURRENT_SSH_PORT to $SSH_PORT."
+    log warn "If your hosting provider has its own firewall (security group, cloud firewall),"
+    log warn "open port $SSH_PORT/tcp there too, or you will be locked out."
+  fi
 }
 
 # Usage: get_firewall_config <webserver>  ("none" -> only SSH is open by default)
@@ -330,6 +388,11 @@ confirm_all_changes() {
   echo "Firewall: UFW enabled, open ports: ${ports:-none}"
   if [[ " $ports " != *" $SSH_PORT "* ]]; then
     echo "  ⚠ SSH port $SSH_PORT will NOT be opened"
+  fi
+  if [[ "$SSH_PORT" != "$CURRENT_SSH_PORT" ]]; then
+    echo "SSH port: $SSH_PORT (changed from $CURRENT_SSH_PORT)"
+  else
+    echo "SSH port: $SSH_PORT"
   fi
   if [[ "$ssh_password" == "no" ]]; then
     echo "SSH: key-only login for admins, root login disabled"
@@ -737,12 +800,38 @@ EOF
     return 1
   fi
 
-  # Reload (existing sessions stay open). On Ubuntu 24.04 sshd may be
-  # socket-activated and not running yet; it will read the new config on start.
-  systemctl try-reload-or-restart ssh
+  # Ubuntu 22.10+ uses socket activation: ssh.socket (not sshd) owns the listening
+  # port. A generator builds it from the Port line in sshd_config, so a port change
+  # needs a daemon-reload + socket restart. Existing sessions stay open either way.
+  local socket_activated="no"
+  if systemctl is-enabled --quiet ssh.socket 2>/dev/null || systemctl is-active --quiet ssh.socket 2>/dev/null; then
+    socket_activated="yes"
+  fi
 
-  log success "SSH hardened (root login off, password login: $password_auth)"
-  if [[ "$password_auth" == "no" ]]; then
+  if [[ "$SSH_PORT" != "$CURRENT_SSH_PORT" && "$socket_activated" == "yes" ]]; then
+    systemctl daemon-reload
+    systemctl restart ssh.socket
+    systemctl try-restart ssh
+  elif [[ "$SSH_PORT" != "$CURRENT_SSH_PORT" ]]; then
+    systemctl restart ssh
+  else
+    # Not running yet on socket-activated systems; it reads the config on start
+    systemctl try-reload-or-restart ssh
+  fi
+
+  if ! ss -Hltn "sport = :$SSH_PORT" 2>/dev/null | grep -q .; then
+    log warn "Nothing is listening on port $SSH_PORT yet, check: sudo ss -ltnp | grep ssh"
+  fi
+
+  log success "SSH hardened (port $SSH_PORT, root login off, password login: $password_auth)"
+  if [[ "$SSH_PORT" != "$CURRENT_SSH_PORT" ]]; then
+    log warn "SSH moved to port $SSH_PORT. Test a NEW session before closing this one:"
+    log warn "  ssh -p $SSH_PORT <user>@<server>"
+    if ufw status 2>/dev/null | grep -qE "^$CURRENT_SSH_PORT(/tcp)?[[:space:]]"; then
+      log warn "Old port $CURRENT_SSH_PORT is still open in UFW. Once the new port works, close it:"
+      log warn "  sudo ufw status numbered   # then: sudo ufw delete <number>"
+    fi
+  elif [[ "$password_auth" == "no" ]]; then
     log warn "Test a NEW SSH session with your key before closing this one!"
   fi
 }
@@ -838,6 +927,9 @@ show_status() {
   fi
 
   echo ""
+  echo "SSH: port $SSH_PORT (connect with: ssh -p $SSH_PORT <user>@<server>)"
+
+  echo ""
   echo "Firewall:"
   ufw status | grep "Status:"
 
@@ -894,6 +986,9 @@ main() {
       [[ -n "$line" ]] && websites+=("$line")
     done <<< "$websites_output"
   fi
+
+  # Not in $(...): it sets the global SSH_PORT used by UFW, sshd and fail2ban
+  get_ssh_port "$webserver"
 
   local firewall_output
   firewall_output=$(get_firewall_config "$webserver")
